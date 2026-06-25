@@ -18,7 +18,7 @@ app = typer.Typer(add_completion=False, help="AI/ML Pulse, local AI/ML field-tre
 console = Console() 
 
 def _parse_since(value: str) -> datetime:
-    s = value.strip().lower
+    s = value.strip().lower()
     if s.endswith("d") and s[:-1].isdigit():
         return datetime.now() - timedelta(days=int(s[:-1]))
     if s.endswith("w") and s[:-1].isdigit():
@@ -26,10 +26,10 @@ def _parse_since(value: str) -> datetime:
     try:
         return datetime.fromisoformat(s)
     except ValueError:
-        raise type.BadParameter(f"unrecognized --since={value!r}") from None
+        raise typer.BadParameter(f"unrecognized --since={value!r}") from None
 
 def _emit_json(payload: object) -> None:
-    return typer.echo(json.dumps(payload, indent=2, default=str))
+    typer.echo(json.dumps(payload, indent=2, default=str))
 
 def _print_summary(results: list[FetchResult]) -> None:
     table = Table(title="Fetch Summary",show_lines=False)

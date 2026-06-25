@@ -36,7 +36,7 @@ class Topic(BaseModel):
     label: str
     keywords: list[str] = Field(default_factory=list)
     item_count: int = 0
-    avrg_score: float | None = None
+    avg_score: float | None = None
 
 class FetchResult(BaseModel):
     source: SourceName
@@ -56,5 +56,5 @@ class FetchResult(BaseModel):
 def week_start(d: date|datetime) -> date:
     """return the monday of the ISO week containing 'd'"""
     if isinstance(d, datetime):
-        d = d.date
+        d = d.date()
     return d.fromordinal(d.toordinal() - d.weekday())
