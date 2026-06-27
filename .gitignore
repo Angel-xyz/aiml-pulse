@@ -10,3 +10,4 @@ htmlcov/
 data/pulse.db
 data/digests/
 .DS_Store
+.coverage
