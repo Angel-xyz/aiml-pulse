@@ -12,10 +12,13 @@ from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
+from aiml_pulse import storage
+from aiml_pulse.config import DIGEST_DIR, load_settings
 from aiml_pulse.models import FetchResult, Item, SourceName
+from aiml_pulse.sources import get_source
 
 app = typer.Typer(add_completion=False, help="AI/ML Pulse, local AI/ML field-trends aggregator.")
-console = Console() 
+console = Console()
 
 def _parse_since(value: str) -> datetime:
     s = value.strip().lower()
@@ -80,6 +83,73 @@ def fetch(
     json_output: bool = typer.Option(False, "--json", help="json as stdout")
 ) -> None:
     """Scrape all configured sources, persist to SQLite while caching"""
+    storage.bootstrap()
+    cutoff = _parse_since(since)
+
+    if sources.strip():
+        wanted = {s.strip() for s in sources.split(",") if s.strip()}
+        source_names = [SourceName(s) for s in wanted]
+    else:
+        source_names = list(load_settings().enabled_sources)
+
+    console.print(
+        Panel.fit(
+            f"[bold]pulse fetch[/bold] · since={cutoff.date().isoformat()}\n"
+            f"sources: {', '.join(s.value for s in source_names)}\n"
+            f"dry-run: {dry_run}",
+            border_style="cyan",
+        )
+    )
+
+    results: list[FetchResult] = []
+    with Progress(SpinnerColumn(), TextColumn("{task.description}"), console=console, transient=True) as progress:
+        for src_name in source_names:
+            task = progress.add_task(f"Fetching {src_name.value}…", total=None)
+            started = datetime.now()
+            try:
+                source = get_source(src_name)
+                items = source.fetch(cutoff)
+                inserted = 0
+                skipped = 0
+                if not dry_run:
+                    inserted, skipped = storage.upsert_many(items)
+                    storage.set_source_last_fetched(src_name, started)
+                else:
+                    inserted = len(items)
+                results.append(
+                    FetchResult(
+                        source=src_name,
+                        fetched=len(items),
+                        inserted=inserted,
+                        skipped=skipped,
+                        errors=0,
+                        started_at=started,
+                        finished_at=datetime.now(),
+                    )
+                )
+            except Exception as exc:
+                console.print(f"[red]Error fetching {src_name.value}:[/red] {exc}")
+                results.append(
+                    FetchResult(
+                        source=src_name,
+                        fetched=0,
+                        inserted=0,
+                        skipped=0,
+                        errors=1,
+                        started_at=started,
+                        finished_at=datetime.now(),
+                    )
+                )
+            finally:
+                progress.update(task, completed=True)
+
+    if json_output:
+        _emit_json([r.model_dump() for r in results])
+    else:
+        _print_summary(results)
+
+    if any(r.errors for r in results):
+        sys.exit(1)
 
 @app.command()
 def top(
@@ -88,6 +158,24 @@ def top(
     json_output: bool = typer.Option(False, "--json")
 ) -> None:
     """Top paper/repos/discussions of the week"""
+    storage.bootstrap()
+    cutoff = datetime.now() - timedelta(days=days)
+    items = storage.get_items_since(cutoff)
+    items = sorted(items, key=lambda i: (i.score or 0), reverse=True)[:limit]
+
+    if json_output:
+        _emit_json(_items_to_json(items))
+        return
+
+    table = Table(title=f"Top {limit} items · last {days} days", show_lines=False)
+    table.add_column("Score", justify="right")
+    table.add_column("Source")
+    table.add_column("Title")
+    for item in items:
+        score = f"{item.score:.0f}" if item.score is not None else "—"
+        title = item.title if len(item.title) <= 80 else item.title[:77] + "…"
+        table.add_row(score, item.source.value, f"[link={item.url}]{title}[/link]")
+    console.print(table)
 
 @app.command()
 def trending(
