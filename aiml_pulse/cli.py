@@ -13,7 +13,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
 from aiml_pulse import storage
-from aiml_pulse.config import DIGEST_DIR, load_settings
+from aiml_pulse.config import DIGESTS_DIR, load_settings
 from aiml_pulse.models import FetchResult, Item, SourceName
 from aiml_pulse.sources import get_source
 
@@ -72,8 +72,19 @@ def _items_to_json(items: list[Item]) -> list[dict]:
         } for item in items
     ]
 
-def _item_id(item: Item) -> int:
-    """ToDo, needs functional storage (bd)"""
+def _item_id(item: Item) -> int | None:
+    rows = storage.search_items(f'"{item.external_id}"', limit=1)
+    for r in rows:
+        if r.external_id == item.external_id and r.source == item.source:
+            with storage.connect() as conn:
+                row = conn.execute(
+                    "SELECT id FROM item WHERE external_id = ? AND source_id = "
+                    "(SELECT id FROM source WHERE name = ?)",
+                    (item.external_id, item.source.value),
+                ).fetchone()
+                if row:
+                    return int(row["id"])
+    return None
 
 @app.command()
 def fetch(
@@ -184,6 +195,26 @@ def trending(
     json_output: bool = typer.Option(False, "--json")
 ) -> None:
     """Scrape trending repos with the tag AI/ML (ranked by weekly stars)"""
+    storage.bootstrap()
+    cutoff = datetime.now() - timedelta(days=days)
+    items = storage.get_items_since(cutoff)
+    gh_items = [i for i in items if i.source == SourceName.GITHUB]
+    gh_items = sorted(gh_items, key=lambda i: (i.score or 0), reverse=True)[:limit]
+
+    if json_output:
+        _emit_json(_items_to_json(gh_items))
+        return
+
+    if not gh_items:
+        console.print("No GitHub items yet. Run `pulse fetch --sources github`.")
+        return
+    table = Table(title=f"Trending GitHub repos · last {days} days", show_lines=False)
+    table.add_column("★/day", justify="right")
+    table.add_column("Repo")
+    for item in gh_items:
+        score = f"{item.score:.0f}" if item.score is not None else "—"
+        table.add_row(score, f"[link={item.url}]{item.title}[/link]")
+    console.print(table)
 
 @app.command()
 def topics(
@@ -200,6 +231,28 @@ def search(
     json_output: bool = typer.Option(False, "--json", help="json as stdout")
 ) -> None:
     """Full-text search across all ingested items (FTS5)"""
+    storage.bootstrap()
+    items = storage.search_items(query, limit=limit)
+
+    if json_output:
+        _emit_json(_items_to_json(items))
+        return
+
+    if not items:
+        console.print(f"No matches for [bold]{query}[/bold].")
+        return
+    table = Table(title=f"Search · {query} · {len(items)} hits", show_lines=False)
+    table.add_column("Source")
+    table.add_column("Title")
+    table.add_column("Published")
+    for item in items:
+        title = item.title if len(item.title) <= 80 else item.title[:77] + "…"
+        table.add_row(
+            item.source.value,
+            f"[link={item.url}]{title}[/link]",
+            item.published_at.strftime("%Y-%m-%d"),
+        )
+    console.print(table)
 
 @app.command(name="digest")
 def digest_cmd(
