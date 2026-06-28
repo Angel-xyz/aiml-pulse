@@ -9,7 +9,7 @@ from aiml_pulse.models import SourceName
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = PROJECT_ROOT / "data"
 DB_PATH = DATA_DIR / "pulse.db"
-DIGEST_DIR = DATA_DIR / "digests"
+DIGESTS_DIR = DATA_DIR / "digests"
 CACHE_DIR = DATA_DIR / "cache"
 
 class Settings(BaseModel):
@@ -21,6 +21,6 @@ class Settings(BaseModel):
 
 def load_settings() -> Settings:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    DIGEST_DIR.mkdir(parents=True, exist_ok=True)
+    DIGESTS_DIR.mkdir(parents=True, exist_ok=True)
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     return Settings()
