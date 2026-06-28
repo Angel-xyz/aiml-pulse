@@ -11,11 +11,11 @@ from aiml_pulse.models import SourceName
 
 from .base import BaseSource
 from .hackernews import HackerNewsSource
+from .github import GitHubSource
 
 SOURCES: dict[SourceName, type[BaseSource]] = {
     SourceName.HACKERNEWS: HackerNewsSource,
-    # Stubs — implement their .fetch() before adding here:
-    # SourceName.GITHUB:       GitHubSource,
+    SourceName.GITHUB: GitHubSource,
     # SourceName.HUGGINGFACE:  HuggingFaceSource,
     # SourceName.ARXIV:        ArxivSource,
     # SourceName.NEWSLETTERS:  NewsletterSource,
