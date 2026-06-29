@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -46,7 +46,7 @@ def render(
     output: Path | None = None,
 ) -> Path:
     today = today or datetime.now().date()
-    cutoff = datetime.combine(today, datetime.min.time())
+    cutoff = datetime.combine(today, datetime.min.time()) - timedelta(days=days - 1)
 
     items = items if items is not None else storage.get_items_since(cutoff)
     items = sorted(items, key=lambda i: (i.score or 0), reverse=True)[:top_n]
