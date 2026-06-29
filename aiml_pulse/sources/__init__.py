@@ -12,13 +12,16 @@ from aiml_pulse.models import SourceName
 from .base import BaseSource
 from .hackernews import HackerNewsSource
 from .github import GitHubSource
+from .arxiv import ArxivSource
+from .huggingface import HuggingFaceSource
+from .newsletters import NewslettersSource
 
 SOURCES: dict[SourceName, type[BaseSource]] = {
     SourceName.HACKERNEWS: HackerNewsSource,
     SourceName.GITHUB: GitHubSource,
-    # SourceName.HUGGINGFACE:  HuggingFaceSource,
-    # SourceName.ARXIV:        ArxivSource,
-    # SourceName.NEWSLETTERS:  NewsletterSource,
+    SourceName.HUGGINGFACE:  HuggingFaceSource,
+    SourceName.ARXIV:        ArxivSource,
+    SourceName.NEWSLETTERS:  NewslettersSource,
 }
 
 
