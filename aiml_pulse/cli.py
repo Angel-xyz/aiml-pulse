@@ -12,7 +12,7 @@ from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
-from aiml_pulse import storage
+from aiml_pulse import storage, digest
 from aiml_pulse.config import DIGESTS_DIR, load_settings
 from aiml_pulse.models import FetchResult, Item, SourceName
 from aiml_pulse.sources import get_source
@@ -261,6 +261,11 @@ def digest_cmd(
     open_browser: bool = typer.Option(False, "--open", help="Open the file in your browser")
 ) -> None:
     """Generate a beatiful HTML digest for the week"""
+    storage.bootstrap()
+    output = digest.render(days=days, output=out)
+    console.print(f"[green]Wrote[/green] {output}")
+    if open_browser:
+        webbrowser.open(output.as_uri())
 
 @app.command()
 def dashboard(
