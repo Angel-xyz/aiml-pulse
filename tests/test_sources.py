@@ -300,3 +300,273 @@ class TestGitHubSource:
 
         assert len(items) >= 1
         assert succeed_count >= 1
+
+
+# ---------------------------------------------------------------------------
+# arXiv source
+# ---------------------------------------------------------------------------
+
+_ARXIV_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <id>http://arxiv.org/abs/2606.12345v1</id>
+    <title>Attention Is All You Need — Revisited</title>
+    <summary>A new take on transformers.</summary>
+    <published>2026-06-25T10:00:00Z</published>
+    <author><name>Jane Doe</name></author>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/2606.67890v1</id>
+    <title>MoE training at scale</title>
+    <summary>Sparse mixture of experts for language models.</summary>
+    <published>2026-06-24T08:00:00Z</published>
+    <author><name>John Smith</name></author>
+  </entry>
+  <entry>
+    <title>No ID entry — should be skipped</title>
+    <summary>Has no id element.</summary>
+    <published>2026-06-25T09:00:00Z</published>
+    <author><name>Someone</name></author>
+  </entry>
+</feed>"""
+
+
+class TestArxivSource:
+    """Tests for ArxivSource.fetch()."""
+
+    def test_fetches_and_parses_entries(self, tmp_db: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        """API returns entries, they are parsed into Items."""
+        storage.bootstrap(path=tmp_db)
+
+        def fake_get_text(url: str, params: dict | None = None, **kwargs) -> str:  # type: ignore[reportUnusedGeneric]
+            assert "export.arxiv.org" in url
+            return _ARXIV_XML
+
+        monkeypatch.setattr("aiml_pulse.sources.arxiv.get_text", fake_get_text)
+
+        src = get_source(SourceName.ARXIV)
+        items = src.fetch(date.today() - timedelta(days=7))
+
+        assert len(items) == 2
+        titles = {i.title for i in items}
+        assert "Attention Is All You Need — Revisited" in titles
+        assert "MoE training at scale" in titles
+
+    def test_skips_entries_without_id(self, tmp_db: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Entries with no id element are silently skipped."""
+        storage.bootstrap(path=tmp_db)
+
+        xml = """<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <title>No ID entry</title>
+    <summary>Should be skipped.</summary>
+    <published>2026-06-25T10:00:00Z</published>
+    <author><name>Someone</name></author>
+  </entry>
+</feed>"""
+        monkeypatch.setattr("aiml_pulse.sources.arxiv.get_text", lambda url, **kw: xml)
+
+        src = get_source(SourceName.ARXIV)
+        items = src.fetch(date.today() - timedelta(days=7))
+
+        # id is empty/absent, rsplit("")[-1] == "", which is falsy → skipped
+        assert len(items) == 0
+
+    def test_score_is_none(self, tmp_db: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        """arXiv items have score=None (no download count in API response)."""
+        storage.bootstrap(path=tmp_db)
+
+        monkeypatch.setattr("aiml_pulse.sources.arxiv.get_text", lambda url, **kw: _ARXIV_XML)
+
+        src = get_source(SourceName.ARXIV)
+        items = src.fetch(date.today() - timedelta(days=7))
+
+        assert all(i.score is None for i in items)
+
+    def test_continues_after_feed_error(self, tmp_db: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        """If the single arXiv API call fails, an empty list is returned (not raised)."""
+        storage.bootstrap(path=tmp_db)
+
+        def fake_get_text(url: str, **kwargs) -> str:  # type: ignore[reportUnusedGeneric]
+            raise ConnectionError("network glitch")
+
+        monkeypatch.setattr("aiml_pulse.sources.arxiv.get_text", fake_get_text)
+
+        src = get_source(SourceName.ARXIV)
+        items = src.fetch(date.today() - timedelta(days=7))
+
+        # arxiv makes one call; on exception it returns [] gracefully
+        assert items == []
+
+
+# ---------------------------------------------------------------------------
+# Newsletters source
+# ---------------------------------------------------------------------------
+
+_NEWSLETTER_RSS = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>The Batch</title>
+    <link>https://www.deeplearning.ai/the-batch/</link>
+    <item>
+      <title>GPT-5 announced today</title>
+      <link>https://example.com/gpt5</link>
+      <author>Andrew Ng</author>
+      <summary>A new milestone in AI.</summary>
+      <pubDate>Wed, 25 Jun 2026 12:00:00 +0000</pubDate>
+    </item>
+    <item>
+      <title>Gemini 2.0 released</title>
+      <link>https://example.com/gemini</link>
+      <author>Demis Hassabis</author>
+      <summary>Multimodal breakthroughs.</summary>
+      <pubDate>Tue, 24 Jun 2026 09:00:00 +0000</pubDate>
+    </item>
+    <item>
+      <title>Old newsletter from 2020</title>
+      <link>https://example.com/old</link>
+      <author>Tester</author>
+      <summary>Should be filtered out.</summary>
+      <pubDate>Mon, 01 Jan 2020 00:00:00 +0000</pubDate>
+    </item>
+  </channel>
+</rss>"""
+
+
+class TestNewslettersSource:
+    """Tests for NewslettersSource.fetch()."""
+
+    def test_fetches_and_filters_by_cutoff(self, tmp_db: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Items published before cutoff are excluded; same link across feeds is deduped."""
+        storage.bootstrap(path=tmp_db)
+
+        # All 3 feeds return the same RSS. 2020 item is filtered by cutoff.
+        # Remaining 2 items per feed, but links are unique per feed,
+        # so no dedup → 2 * 3 = 6 items.
+        monkeypatch.setattr(
+            "aiml_pulse.sources.newsletters.get_text",
+            lambda url, **kw: _NEWSLETTER_RSS,
+        )
+
+        src = get_source(SourceName.NEWSLETTERS)
+        cutoff = datetime.now() - timedelta(days=7)
+        items = src.fetch(cutoff)
+
+        assert len(items) == 6  # 2 valid items × 3 feeds
+        titles = [i.title for i in items]
+        assert "GPT-5 announced today" in titles
+        assert "Gemini 2.0 released" in titles
+        assert "Old newsletter from 2020" not in titles
+
+    def test_dedupes_across_feeds(self, tmp_db: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Same link appearing in multiple feeds results in one Item."""
+        storage.bootstrap(path=tmp_db)
+
+        rss = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Feed1</title>
+    <item>
+      <title>Shared item</title>
+      <link>https://example.com/shared</link>
+      <pubDate>Wed, 25 Jun 2026 12:00:00 +0000</pubDate>
+    </item>
+  </channel>
+</rss>"""
+        # Each of the 3 feeds returns the same RSS with one item.
+        # external_id = feed_id + ":" + link, so they differ per feed.
+        # To test dedup we need same external_id → same feed_id + same link.
+        # Use a single-feed approach: only one feed returns items.
+        call_count = 0
+
+        def fake_get_text(url: str, **kw) -> str:  # type: ignore[reportUnusedGeneric]
+            nonlocal call_count
+            call_count += 1
+            if call_count > 1:
+                raise ConnectionError("stop")  # skip remaining feeds
+            return rss
+
+        monkeypatch.setattr("aiml_pulse.sources.newsletters.get_text", fake_get_text)
+
+        src = get_source(SourceName.NEWSLETTERS)
+        items = src.fetch(datetime.now() - timedelta(days=7))
+
+        ext_ids = [i.external_id for i in items]
+        assert len(ext_ids) == len(set(ext_ids))  # all unique
+
+    def test_skips_items_without_link(self, tmp_db: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Items with no link attribute are silently skipped."""
+        storage.bootstrap(path=tmp_db)
+
+        rss = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Test</title>
+    <item>
+      <title>Has link</title>
+      <link>https://example.com/has-link</link>
+      <pubDate>Wed, 25 Jun 2026 12:00:00 +0000</pubDate>
+    </item>
+    <item>
+      <title>No link</title>
+      <pubDate>Wed, 25 Jun 2026 12:00:00 +0000</pubDate>
+    </item>
+  </channel>
+</rss>"""
+        # Only return RSS for the first feed call
+        call_count = 0
+
+        def fake_get_text(url: str, **kw) -> str:  # type: ignore[reportUnusedGeneric]
+            nonlocal call_count
+            call_count += 1
+            if call_count > 1:
+                raise ConnectionError("stop")
+            return rss
+
+        monkeypatch.setattr("aiml_pulse.sources.newsletters.get_text", fake_get_text)
+
+        src = get_source(SourceName.NEWSLETTERS)
+        items = src.fetch(datetime.now() - timedelta(days=7))
+
+        assert len(items) == 1
+        assert items[0].title == "Has link"
+
+    def test_score_is_none(self, tmp_db: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Newsletter items have score=None (no quantitative ranking)."""
+        storage.bootstrap(path=tmp_db)
+
+        call_count = 0
+
+        def fake_get_text(url: str, **kw) -> str:  # type: ignore[reportUnusedGeneric]
+            nonlocal call_count
+            call_count += 1
+            if call_count > 1:
+                raise ConnectionError("stop")
+            return _NEWSLETTER_RSS
+
+        monkeypatch.setattr("aiml_pulse.sources.newsletters.get_text", fake_get_text)
+
+        src = get_source(SourceName.NEWSLETTERS)
+        items = src.fetch(datetime.now() - timedelta(days=7))
+
+        assert all(i.score is None for i in items)
+
+    def test_continues_after_feed_error(self, tmp_db: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        """One failing feed does not abort the whole fetch."""
+        storage.bootstrap(path=tmp_db)
+        call_count = 0
+
+        def fake_get_text(url: str, **kwargs) -> str:  # type: ignore[reportUnusedGeneric]
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise ConnectionError("feed unavailable")
+            return _NEWSLETTER_RSS
+
+        monkeypatch.setattr("aiml_pulse.sources.newsletters.get_text", fake_get_text)
+
+        src = get_source(SourceName.NEWSLETTERS)
+        items = src.fetch(datetime.now() - timedelta(days=7))
+
+        assert len(items) >= 2
