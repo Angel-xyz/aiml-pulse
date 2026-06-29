@@ -12,9 +12,12 @@ from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
-from aiml_pulse import storage, digest
+from aiml_pulse import digest, storage, trends
 from aiml_pulse.config import DIGESTS_DIR, load_settings
 from aiml_pulse.models import FetchResult, Item, SourceName
+from aiml_pulse.nlp.tfidf import build_corpus, fit_tfidf
+from aiml_pulse.nlp.clustering import choose_k, cluster
+from aiml_pulse.nlp.topics import aggregate_topics, name_topics
 from aiml_pulse.sources import get_source
 
 app = typer.Typer(add_completion=False, help="AI/ML Pulse, local AI/ML field-trends aggregator.")
@@ -223,6 +226,52 @@ def topics(
     json_output: bool = typer.Option(False, "--json")
 ) -> None:
     """Auto extract trending topics (TF-IDF + K-means)"""
+    storage.bootstrap()
+    cutoff = datetime.now() - timedelta(days=days)
+    items = storage.get_items_since(cutoff)
+
+    if len(items) < 5:
+        console.print("[yellow]Not enough items to cluster.[/yellow] Run `pulse fetch` first.")
+        return
+
+    docs = build_corpus(items)
+    vectorizer, matrix = fit_tfidf(docs)
+    cluster_k = k if k > 0 else choose_k(len(items))
+    model = cluster(matrix, cluster_k)
+    names = name_topics(vectorizer, model)
+    name_by_id = {cid: label for cid, label in names}
+
+    assignments: list[tuple[Item, str, float]] = []
+    for item, cid in zip(items, model.labels_, strict=True):
+        label = name_by_id.get(int(cid))
+        if label:
+            assignments.append((item, label, 1.0))
+
+    aggregated = aggregate_topics(assignments)
+    trends.take_snapshot(aggregated)
+
+    for item, label in zip(items, model.labels_, strict=True):
+        topic_label = name_by_id.get(int(label))
+        if topic_label is None:
+            continue
+        topic_id = storage.upsert_topic(topic_label)
+        item_id = _item_id(item)
+        if item_id is not None:
+            storage.link_item_topic(item_id, topic_id, 1.0)
+
+    if json_output:
+        _emit_json([t.model_dump() for t in aggregated])
+        return
+
+    table = Table(title=f"Topics · last {days} days · k={cluster_k}", show_lines=False)
+    table.add_column("#", justify="right")
+    table.add_column("Topic")
+    table.add_column("Items", justify="right")
+    table.add_column("Avg score", justify="right")
+    for idx, topic in enumerate(aggregated, start=1):
+        avg = f"{topic.avg_score:.1f}" if topic.avg_score is not None else "—"
+        table.add_row(str(idx), topic.label, str(topic.item_count), avg)
+    console.print(table)
 
 @app.command()
 def search(
