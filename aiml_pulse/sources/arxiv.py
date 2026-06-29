@@ -48,6 +48,8 @@ class ArxivSource(BaseSource):
         for entry in root.findall("atom:entry", NS):
             arxiv_id = entry.findtext("atom:id", default="", namespaces=NS)
             arxiv_id = arxiv_id.rsplit("/", 1)[-1]
+            if not arxiv_id:
+                continue
             title = (entry.findtext("atom:title", default="", namespaces=NS) or "").strip()
             summary = (entry.findtext("atom:summary", default="", namespaces=NS) or "").strip()
             author_el = entry.find("atom:author/atom:name", NS)
