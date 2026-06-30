@@ -352,6 +352,6 @@ def bootstrap(path: str|None = None) -> None:
     init_db(path)
     register_default_sources(path)
 
-def this_week_start() -> None:
+def this_week_start() -> date:
     """Call week start from models"""
     return week_start(datetime.now())

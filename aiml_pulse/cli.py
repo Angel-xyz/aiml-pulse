@@ -324,11 +324,61 @@ def dashboard(
 
 @app.command()
 def follow(
-    topic: str = typer.Argument(..., help="Topic label, e.g. 'RAG' or 'mixture_of_experts'."),
+    topic: str | None = typer.Argument(None, help="Topic label, e.g. 'RAG' or 'mixture_of_experts'."),
+    index: int | None = typer.Option(None, "--index", help="Follow by topic number"),
     days: int = typer.Option(30),
     json_output: bool = typer.Option(False, "--json", help="json as stdout")
 ) -> None:
     """Track a specific topic. Prints weekly count history."""
+    storage.bootstrap()
+    if topic:
+        history = storage.topic_weekly_history(topic, weeks=max(4, days // 7))
+        items = storage.items_for_topic(topic, days=days)
+    elif index:
+        topics_tmp = storage.list_topics()
+        topic = topics_tmp[index-1].label
+        history = storage.topic_weekly_history(topic, weeks=max(4, days // 7))
+        items = storage.items_for_topic(topic, days=days)
+    else:
+        table = Table(title=f"History of topics, please select one", show_lines=False)
+        table.add_column("#", justify="right")
+        table.add_column("Topic")
+        table.add_column("Items", justify="right")
+        table.add_column("Avg score", justify="right")
+        tmp_history = storage.list_topics()
+        for idx, _topic in enumerate(tmp_history, start=1):
+            avg = f"{_topic.avg_score:.1f}" if _topic.avg_score is not None else "—"
+            table.add_row(str(idx), _topic.label, str(_topic.item_count), avg)
+        console.print(table)
+        return
+
+    if json_output:
+        _emit_json(
+            {
+                "topic": topic,
+                "history": [{"week": w.isoformat(), "count": c} for w, c in history],
+                "recent_items": _items_to_json(items),
+            }
+        )
+        return
+
+    if not history and not items:
+        console.print(f"No history for topic [bold]{topic}[/bold].")
+        return
+
+    console.print(f"[bold]{topic}[/bold]")
+    if history:
+        table = Table(title="Weekly count", show_lines=False)
+        table.add_column("Week")
+        table.add_column("Count", justify="right")
+        for week, count in history:
+            bar = "█" * min(count, 40)
+            table.add_row(week.isoformat(), f"{count}  {bar}")
+        console.print(table)
+    if items:
+        console.print(f"\n[dim]{len(items)} items in last {days} days:[/dim]")
+        for item in items[:10]:
+            console.print(f"  • [link={item.url}]{item.title}[/link]")
 
 def main() -> None:
     app()
