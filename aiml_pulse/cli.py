@@ -321,6 +321,22 @@ def dashboard(
     port: int = typer.Option(8051, help="Streamlit Port")
 ) -> None:
     """Launch the streamlit dashboard"""
+    import subprocess
+
+    console.print(f"[cyan]Launching dashboard on http://localhost:{port}[/cyan]")
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "streamlit",
+            "run",
+            str(Path(__file__).parent / "dashboard.py"),
+            "--server.port",
+            str(port),
+        ],
+        cwd=Path(__file__).parent.parent,
+        check=True,
+    )
 
 @app.command()
 def follow(
@@ -331,15 +347,8 @@ def follow(
 ) -> None:
     """Track a specific topic. Prints weekly count history."""
     storage.bootstrap()
-    if topic:
-        history = storage.topic_weekly_history(topic, weeks=max(4, days // 7))
-        items = storage.items_for_topic(topic, days=days)
-    elif index:
-        topics_tmp = storage.list_topics()
-        topic = topics_tmp[index-1].label
-        history = storage.topic_weekly_history(topic, weeks=max(4, days // 7))
-        items = storage.items_for_topic(topic, days=days)
-    else:
+
+    if topic is None and index is None:
         table = Table(title=f"History of topics, please select one", show_lines=False)
         table.add_column("#", justify="right")
         table.add_column("Topic")
@@ -351,6 +360,16 @@ def follow(
             table.add_row(str(idx), _topic.label, str(_topic.item_count), avg)
         console.print(table)
         return
+
+    if index is not None:
+        topics_tmp = storage.list_topics()
+        if not topics_tmp or index < 1 or index > len(topics_tmp):
+            console.print(f"No topic with index {index}")
+            return
+        topic = topics_tmp[index-1].label
+
+    history = storage.topic_weekly_history(topic, weeks=max(4, days // 7))
+    items = storage.items_for_topic(topic, days=days)
 
     if json_output:
         _emit_json(
